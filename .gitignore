@@ -17,7 +17,7 @@ env/
 input_images/
 processed_dataset/
 processed_dataset_Real/
-second_ds/
+second ds/
 wavelet_output/
 
 # Zip archives
