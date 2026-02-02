@@ -1,0 +1,50 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# ========================
+# Datasets & generated data
+# ========================
+input_images/
+processed_dataset/
+processed_dataset_Real/
+second_ds/
+wavelet_output/
+
+# Zip archives
+*.zip
+
+# ========================
+# Model checkpoints / weights
+# ========================
+*.pth
+*.pt
+*.ckpt
+
+
+# ========================
+# Logs
+# ========================
+*.log
+
+# ========================
+# OS / Editor junk
+# ========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ========================
+# Optional (keep only if auto-generated)
+# ========================
+DIRECTORY_STRUCTURE.txt
