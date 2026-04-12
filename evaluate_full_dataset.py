@@ -1,5 +1,5 @@
 # ===============================
-# evaluate_full_dataset.py (FINAL COMPLETE)
+# evaluate_full_dataset.py (FINAL FIXED VERSION)
 # ===============================
 
 import os
@@ -23,6 +23,8 @@ from sklearn.metrics import confusion_matrix
 from densenet_classifier import DenseNetClassifier
 
 
+# ===================== WAVELET =====================
+
 def haar_wavelet(image):
     image = cv2.resize(image, (224,224))
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -45,6 +47,8 @@ def haar_wavelet(image):
     return np.stack([norm(LL), norm(LH), norm(HL), norm(HH)], axis=0)
 
 
+# ===================== DATASET =====================
+
 class TestDataset(Dataset):
 
     def __init__(self, root):
@@ -63,21 +67,32 @@ class TestDataset(Dataset):
         return len(self.samples)
 
 
+# ===================== EVALUATION =====================
+
 def evaluate_folder(folder):
 
     loader = DataLoader(TestDataset(folder), batch_size=32)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    model = DenseNetClassifier(device)
-    model.model.load_state_dict(torch.load("densenet_best.pth", map_location=device))
-    model.model.eval()
+    # ✅ FIXED: correct argument passing
+    model = DenseNetClassifier(device=device)
+
+    # ✅ FIXED: correct loading
+    model.load_model("densenet_best.pth")
+
+    # ✅ FIXED: set eval mode properly
+    model.features.eval()
+    model.adapter.eval()
+    model.se.eval()
+    model.classifier.eval()
 
     acc, preds, labels, auc, ap, eer, loss = model.evaluate(loader)
 
     logger.info(f"{folder.name} ACC: {acc:.2f} | AUC: {auc:.2f} | EER: {eer:.2f}")
 
-    # Save metrics
+    # ================= SAVE METRICS =================
+
     results_file = folder/"evaluation_results.txt"
 
     with open(results_file, "w") as f:
@@ -92,14 +107,20 @@ def evaluate_folder(folder):
 
     logger.info(f"Results saved to {results_file}")
 
-    # Confusion matrix
+    # ================= CONFUSION MATRIX =================
+
     cm = confusion_matrix(labels, preds)
+
     sns.heatmap(cm/np.sum(cm,axis=1,keepdims=True), annot=True, fmt=".2%")
+    plt.title(f"{folder.name} Confusion Matrix")
     plt.savefig(folder/"confusion.png")
     plt.close()
 
 
+# ===================== MAIN =====================
+
 def main():
+
     root = Path("data/test")
 
     logger.info("Evaluating CLEAN dataset...")

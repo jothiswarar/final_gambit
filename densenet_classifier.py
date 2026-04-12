@@ -1,7 +1,3 @@
-# ===============================
-# densenet_classifier.py (FINAL COMPLETE)
-# ===============================
-
 import os
 import numpy as np
 from pathlib import Path
@@ -55,11 +51,32 @@ class WaveletDataset(Dataset):
     def normalize(self, x):
         return (x - x.min()) / (x.max() - x.min() + 1e-8)
 
+    def frequency_perturb(self, LH, HL, HH):
+        if np.random.rand() < 0.5:
+            noise = np.random.normal(0, 0.02, LH.shape)
+            LH += noise
+            HL += noise
+            HH += noise
+
+        if np.random.rand() < 0.5:
+            scale = np.random.uniform(0.9, 1.1)
+            LH *= scale
+            HL *= scale
+            HH *= scale
+
+        return LH, HL, HH
+
+    def frequency_threshold(self, LH, HL, HH):
+        threshold = 0.05
+        LH = np.where(np.abs(LH) < threshold, 0, LH)
+        HL = np.where(np.abs(HL) < threshold, 0, HL)
+        HH = np.where(np.abs(HH) < threshold, 0, HH)
+        return LH, HL, HH
+
     def __getitem__(self, idx):
 
         img = cv2.imread(self.image_paths[idx])
 
-        # 🔥 Augmentation
         if self.train:
             if np.random.rand() < 0.3:
                 img = cv2.GaussianBlur(img, (5,5), 0)
@@ -68,6 +85,11 @@ class WaveletDataset(Dataset):
                 img = cv2.resize(img, (224,224))
 
         LL, LH, HL, HH = haar_wavelet(img)
+
+        if self.train:
+            LH, HL, HH = self.frequency_perturb(LH, HL, HH)
+
+        LH, HL, HH = self.frequency_threshold(LH, HL, HH)
 
         stacked = np.stack([
             self.normalize(LL),
@@ -82,31 +104,84 @@ class WaveletDataset(Dataset):
         return len(self.image_paths)
 
 
+# ===================== SE BLOCK =====================
+
+class SEBlock(nn.Module):
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channels, channels // reduction),
+            nn.ReLU(),
+            nn.Linear(channels // reduction, channels),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y
+
+
 # ===================== MODEL =====================
 
 class DenseNetClassifier:
 
-    def __init__(self, device='cuda'):
+    def __init__(self, class_weights=None, device='cuda'):
 
         self.device = device
 
-        self.model = models.densenet121(weights=None)
-        self.model.features.conv0 = nn.Conv2d(4, 64, 7, 2, 3, bias=False)
+        base = models.densenet121(weights=None)
+        base.features.conv0 = nn.Conv2d(4, 64, 7, 2, 3, bias=False)
 
-        num_features = self.model.classifier.in_features
-        self.model.classifier = nn.Linear(num_features, 2)
+        self.features = base.features
+        self.se = SEBlock(1024)
 
-        self.model.to(device)
+        self.adapter = nn.Sequential(
+            nn.Conv2d(4, 4, kernel_size=1),
+            nn.BatchNorm2d(4),
+            nn.ReLU()
+        )
 
-        self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=1e-4)
+        self.dropout = nn.Dropout(0.5)
+        self.classifier = nn.Linear(1024, 2)
+
+        self.to(device)
+
+        if class_weights is not None:
+            self.criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
+        else:
+            self.criterion = nn.CrossEntropyLoss()
+
+        self.optimizer = optim.Adam(self.parameters(), lr=1e-4)
+
+    def parameters(self):
+        return list(self.features.parameters()) + \
+               list(self.adapter.parameters()) + \
+               list(self.se.parameters()) + \
+               list(self.classifier.parameters())
+
+    def to(self, device):
+        self.features.to(device)
+        self.adapter.to(device)
+        self.se.to(device)
+        self.classifier.to(device)
+        self.dropout.to(device)
 
     def forward(self, x):
-        return self.model(x)
+        x = self.adapter(x)
+        x = self.features(x)
+        x = self.se(x)
+        x = torch.relu(x)
+        x = torch.nn.functional.adaptive_avg_pool2d(x, (1,1))
+        x = torch.flatten(x, 1)
+        x = self.dropout(x)
+        return self.classifier(x)
 
     def train_epoch(self, loader):
 
-        self.model.train()
+        self.features.train()
         total_loss, correct, total = 0, 0, 0
 
         for x,y in tqdm(loader, desc="Training"):
@@ -127,7 +202,7 @@ class DenseNetClassifier:
 
     def evaluate(self, loader):
 
-        self.model.eval()
+        self.features.eval()
 
         preds, labels, probs = [], [], []
         total_loss, correct, total = 0,0,0
@@ -165,8 +240,22 @@ class DenseNetClassifier:
 
         return acc, preds, labels, auc, ap, eer, val_loss
 
+    # ✅ FIXED SAVE FUNCTION
     def save_model(self, path):
-        torch.save(self.model.state_dict(), path)
+        torch.save({
+            "features": self.features.state_dict(),
+            "adapter": self.adapter.state_dict(),
+            "se": self.se.state_dict(),
+            "classifier": self.classifier.state_dict()
+        }, path)
+
+    # ✅ LOAD FUNCTION
+    def load_model(self, path):
+        checkpoint = torch.load(path, map_location=self.device)
+        self.features.load_state_dict(checkpoint["features"])
+        self.adapter.load_state_dict(checkpoint["adapter"])
+        self.se.load_state_dict(checkpoint["se"])
+        self.classifier.load_state_dict(checkpoint["classifier"])
 
 
 # ===================== TRAIN =====================
@@ -179,12 +268,20 @@ def load_image_paths(data_path):
     return real+fake, [0]*len(real)+[1]*len(fake)
 
 
+def compute_class_weights(labels):
+    class_counts = np.bincount(labels)
+    weights = 1.0 / class_counts
+    weights = weights / weights.sum()
+    return torch.tensor(weights, dtype=torch.float32)
+
+
 def main():
 
     root = Path(__file__).parent
     data_path = root/"data"/"train"
 
     paths, labels = load_image_paths(data_path)
+    class_weights = compute_class_weights(labels)
 
     train_p, test_p, train_l, test_l = train_test_split(
         paths, labels, test_size=0.2, stratify=labels, random_state=42
@@ -193,10 +290,9 @@ def main():
     train_loader = DataLoader(WaveletDataset(train_p, train_l, True), batch_size=32, shuffle=True)
     test_loader = DataLoader(WaveletDataset(test_p, test_l, False), batch_size=32)
 
-    model = DenseNetClassifier()
+    model = DenseNetClassifier(class_weights=class_weights)
 
     best_auc = 0
-    best_metrics = {}
 
     for epoch in range(10):
 
@@ -207,46 +303,10 @@ def main():
 
         logger.info(f"Train: {train_acc:.2f} | Test: {acc:.2f} | AUC: {auc:.2f}")
 
-        if auc > best_auc or epoch == 0:
+        if auc > best_auc:
             best_auc = auc
-
-            best_metrics = {
-                "epoch": epoch+1,
-                "train_acc": train_acc,
-                "test_acc": acc,
-                "auc": auc,
-                "ap": ap,
-                "eer": eer,
-                "val_loss": val_loss
-            }
-
             model.save_model(root/"densenet_best.pth")
 
-    # ================= SAVE REPORT =================
-
-    results_file = root/"training_results.txt"
-
-    with open(results_file, "w") as f:
-        f.write("="*70 + "\n")
-        f.write("Enhanced DenseNet121 Deepfake Detection\n")
-        f.write("="*70 + "\n\n")
-
-        f.write(f"Best Epoch: {best_metrics['epoch']}\n")
-        f.write(f"Train Accuracy: {best_metrics['train_acc']:.2f}%\n")
-        f.write(f"Test Accuracy: {best_metrics['test_acc']:.2f}%\n")
-        f.write(f"AUC: {best_metrics['auc']:.2f}%\n")
-        f.write(f"AP: {best_metrics['ap']:.2f}%\n")
-        f.write(f"EER: {best_metrics['eer']:.2f}%\n")
-        f.write(f"Validation Loss: {best_metrics['val_loss']:.4f}\n")
-
-        f.write("\nArchitecture:\n")
-        f.write("- Haar Wavelet Input (4 channels)\n")
-        f.write("- DenseNet121 Backbone\n")
-        f.write("- Data Augmentation\n")
-
-        f.write("\n" + "="*70 + "\n")
-
-    logger.info(f"Training results saved to {results_file}")
     logger.info("Training complete")
 
 
