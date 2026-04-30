@@ -1,5 +1,5 @@
 # ===============================
-# process_dataset.py (FINAL STRONG VERSION)
+# process_train_dataset.py
 # ===============================
 
 import os
@@ -8,9 +8,14 @@ import numpy as np
 import random
 from pathlib import Path
 from tqdm import tqdm
+import shutil
 
+# ===============================
 # CONFIG
+# ===============================
+
 IMAGE_SIZE = 224
+NUM_SAMPLES = 5000  # images to convert per class
 
 BLUR_KERNEL = (5, 5)
 NOISE_STD = 10
@@ -39,35 +44,27 @@ def save_image(img, path):
     cv2.imwrite(str(path), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
 # ===============================
-# ATTACK FUNCTIONS
+# ATTACK FUNCTIONS (SAME AS TEST)
 # ===============================
 
 def jpeg(img):
-    # 🔥 Strong random compression
     q = random.randint(20, 60)
     _, enc = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), q])
     return cv2.imdecode(enc, cv2.IMREAD_COLOR)
 
-def resize(img):
+def resize_attack(img):
     h, w = img.shape[:2]
-
-    # 🔥 Random scaling (stronger than /2)
     scale = random.uniform(0.4, 0.8)
-
-    img = cv2.resize(img, (int(w*scale), int(h*scale)))
+    img = cv2.resize(img, (int(w * scale), int(h * scale)))
     img = cv2.resize(img, (w, h))
-
     return img
 
 def crop(img):
     h, w = img.shape[:2]
-
     ratio = random.uniform(0.6, 0.85)
-
-    ch, cw = int(h*ratio), int(w*ratio)
-    y = random.randint(0, h-ch)
-    x = random.randint(0, w-cw)
-
+    ch, cw = int(h * ratio), int(w * ratio)
+    y = random.randint(0, h - ch)
+    x = random.randint(0, w - cw)
     return cv2.resize(img[y:y+ch, x:x+cw], (w, h))
 
 def blur(img):
@@ -83,23 +80,21 @@ def sharpen(img):
     return cv2.filter2D(img, -1, kernel)
 
 # ===============================
-# STRONG COMBINED PROCESSING
+# STRONG PROCESSING (IDENTICAL)
 # ===============================
 
 def apply_random_attacks(img):
 
-    # 🔥 Apply 2–4 random attacks per image
     num_attacks = random.randint(2, 4)
+    chosen = random.sample(ATTACKS, num_attacks)
 
-    chosen_attacks = random.sample(ATTACKS, num_attacks)
-
-    for attack in chosen_attacks:
+    for attack in chosen:
 
         if attack == "jpeg":
             img = jpeg(img)
 
         elif attack == "resize":
-            img = resize(img)
+            img = resize_attack(img)
 
         elif attack == "crop":
             img = crop(img)
@@ -116,26 +111,42 @@ def apply_random_attacks(img):
     return img
 
 # ===============================
-# PROCESS CLASS
+# PROCESS + MOVE
 # ===============================
 
-def process_class(in_dir, out_dir):
+def process_and_move(input_dir, clean_out, processed_out):
 
-    paths = [in_dir/f for f in os.listdir(in_dir)
-             if f.lower().endswith((".jpg",".png",".jpeg",".bmp"))]
+    all_paths = [
+        input_dir / f for f in os.listdir(input_dir)
+        if f.lower().endswith((".jpg", ".png", ".jpeg", ".bmp"))
+    ]
 
-    for p in tqdm(paths, desc=f"Processing {in_dir.name}"):
+    if len(all_paths) == 0:
+        print(f"❌ No images in {input_dir}")
+        return
 
-        img = load_image(p)
-        if img is None:
-            continue
+    # 🔥 RANDOM SELECTION
+    selected = random.sample(all_paths, min(NUM_SAMPLES, len(all_paths)))
 
-        img = cv2.resize(img, (IMAGE_SIZE, IMAGE_SIZE))
+    for p in tqdm(all_paths, desc=f"{input_dir.name}"):
 
-        # 🔥 Apply STRONG processing
-        img = apply_random_attacks(img)
+        if p in selected:
+            # 🔥 PROCESS + MOVE
+            img = load_image(p)
+            if img is None:
+                continue
 
-        save_image(img, out_dir/p.name)
+            img = cv2.resize(img, (IMAGE_SIZE, IMAGE_SIZE))
+            img = apply_random_attacks(img)
+
+            save_image(img, processed_out / p.name)
+
+        else:
+            # 🔥 MOVE CLEAN IMAGE
+            clean_out.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(p), str(clean_out / p.name))
+
+    print(f"✔ Done {input_dir.name}")
 
 # ===============================
 # MAIN
@@ -145,19 +156,31 @@ def main():
 
     root = Path(__file__).parent
 
-    input_base = root/"data"/"test"/"clean"
-    output_base = root/"data"/"test"/"processed"
+    input_base = root / "data" / "train"
 
-    for cls in ["real","fake"]:
+    output_base = root / "data" / "train_split"
 
-        in_dir = input_base/cls
-        out_dir = output_base/cls
+    clean_base = output_base / "clean"
+    processed_base = output_base / "processed"
 
-        if in_dir.exists():
-            process_class(in_dir, out_dir)
+    for cls in ["real", "fake"]:
 
-    print("✅ Strong processed dataset created")
+        in_dir = input_base / cls
 
+        clean_out = clean_base / cls
+        processed_out = processed_base / cls
+
+        if not in_dir.exists():
+            print(f"❌ Missing {in_dir}")
+            continue
+
+        process_and_move(in_dir, clean_out, processed_out)
+
+    print("\n✅ TRAIN DATASET SPLIT CREATED SUCCESSFULLY")
+
+# ===============================
+# RUN
+# ===============================
 
 if __name__ == "__main__":
     main()

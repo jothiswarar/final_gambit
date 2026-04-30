@@ -262,11 +262,27 @@ class DenseNetClassifier:
 
 def load_image_paths(data_path):
 
-    real = [str((data_path/"real")/f) for f in os.listdir(data_path/"real")]
-    fake = [str((data_path/"fake")/f) for f in os.listdir(data_path/"fake")]
+    all_paths = []
+    all_labels = []
 
-    return real+fake, [0]*len(real)+[1]*len(fake)
+    for domain in ["clean", "processed"]:
+        for cls in ["real", "fake"]:
 
+            class_dir = data_path / domain / cls
+
+            if not class_dir.exists():
+                continue
+
+            files = [str(class_dir / f) for f in os.listdir(class_dir)]
+
+            all_paths.extend(files)
+
+            if cls == "real":
+                all_labels.extend([0] * len(files))
+            else:
+                all_labels.extend([1] * len(files))
+
+    return all_paths, all_labels
 
 def compute_class_weights(labels):
     class_counts = np.bincount(labels)

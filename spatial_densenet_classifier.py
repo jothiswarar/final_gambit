@@ -129,30 +129,18 @@ def main():
                              [0.229,0.224,0.225])
     ])
 
-    dataset = datasets.ImageFolder(data_path, transform=transform)
+    clean_dataset = datasets.ImageFolder(data_path/"clean", transform=transform)
+    processed_dataset = datasets.ImageFolder(data_path/"processed", transform=transform)
+
+    # Combine both
+    dataset = torch.utils.data.ConcatDataset([clean_dataset, processed_dataset])
 
     if len(dataset) == 0:
         logger.error("Dataset is empty!")
         return
 
-    # ===============================
-    # LIMIT DATASET
-    # ===============================
-
-    real_idx, fake_idx = [], []
-
-    for i,(_,label) in enumerate(dataset.samples):
-
-        if label==0 and len(real_idx)<10000:
-            real_idx.append(i)
-        elif label==1 and len(fake_idx)<10000:
-            fake_idx.append(i)
-
-        if len(real_idx)==10000 and len(fake_idx)==10000:
-            break
-
-    subset = Subset(dataset, real_idx+fake_idx)
-
+    subset = dataset
+    
     # ===============================
     # TRAIN / VAL SPLIT
     # ===============================
@@ -179,7 +167,7 @@ def main():
     # TRAIN LOOP
     # ===============================
 
-    for epoch in range(20):
+    for epoch in range(10):
 
         logger.info(f"\nEpoch {epoch+1}")
 

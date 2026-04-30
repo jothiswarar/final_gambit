@@ -1,5 +1,5 @@
 # ===============================
-# evaluate_spatial_dataset.py (FIXED)
+# evaluate_spatial_dataset.py (FINAL FULL DATASET VERSION)
 # ===============================
 
 import os
@@ -9,17 +9,24 @@ import numpy as np
 from tqdm import tqdm
 
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from torchvision import datasets, transforms, models
 
 from sklearn.metrics import confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# ===============================
+# SETUP
+# ===============================
+
 logging.basicConfig(level=logging.INFO,
 format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# ===============================
+# EVALUATION FUNCTION
+# ===============================
 
 def evaluate_folder(folder_path):
 
@@ -40,30 +47,23 @@ def evaluate_folder(folder_path):
         logger.error("Empty dataset!")
         return
 
-    real_idx, fake_idx = [], []
+    logger.info(f"Total images in {folder_path.name}: {len(dataset)}")
 
-    for i, (_, label) in enumerate(dataset.samples):
-        if label==0 and len(real_idx)<1000:
-            real_idx.append(i)
-        elif label==1 and len(fake_idx)<1000:
-            fake_idx.append(i)
-
-        if len(real_idx)==1000 and len(fake_idx)==1000:
-            break
-
-    subset = Subset(dataset, real_idx+fake_idx)
-
-    loader = DataLoader(subset,
+    # ✅ USE FULL DATASET (NO LIMIT)
+    loader = DataLoader(dataset,
                         batch_size=128,
                         shuffle=False,
                         num_workers=4)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    model = models.densenet121()
-    model.classifier = torch.nn.Linear(model.classifier.in_features,2)
+    # ===============================
+    # LOAD MODEL
+    # ===============================
 
-    # 🔥 FIXED LOADING
+    model = models.densenet121()
+    model.classifier = torch.nn.Linear(model.classifier.in_features, 2)
+
     model.load_state_dict(torch.load("spatial_densenet_best.pth", map_location=device))
 
     model.to(device)
@@ -71,12 +71,16 @@ def evaluate_folder(folder_path):
 
     preds, labels = [], []
 
+    # ===============================
+    # INFERENCE
+    # ===============================
+
     with torch.no_grad():
         for imgs, lbls in tqdm(loader, desc=f"Evaluating {folder_path.name}"):
 
             imgs = imgs.to(device)
-            out = model(imgs)
 
+            out = model(imgs)
             p = out.argmax(1)
 
             preds.extend(p.cpu().numpy())
@@ -84,6 +88,10 @@ def evaluate_folder(folder_path):
 
     preds = np.array(preds)
     labels = np.array(labels)
+
+    # ===============================
+    # METRICS
+    # ===============================
 
     acc = 100*np.mean(preds==labels)
 
@@ -96,23 +104,41 @@ def evaluate_folder(folder_path):
     logger.info(f"{folder_path.name} Accuracy: {acc:.2f}%")
     logger.info(f"Real Acc: {real_acc:.2f}% | Fake Acc: {fake_acc:.2f}%")
 
-    # ================= SAVE RESULTS =================
+    # ===============================
+    # SAVE RESULTS
+    # ===============================
+
     results_file = folder_path/"spatial_results.txt"
 
     with open(results_file, "w") as f:
+        f.write("="*60 + "\n")
+        f.write(f"{folder_path.name.upper()} RESULTS\n")
+        f.write("="*60 + "\n\n")
         f.write(f"Accuracy: {acc:.2f}%\n")
         f.write(f"Real Accuracy: {real_acc:.2f}%\n")
         f.write(f"Fake Accuracy: {fake_acc:.2f}%\n")
 
-    # Confusion matrix
+    logger.info(f"Results saved to {results_file}")
+
+    # ===============================
+    # CONFUSION MATRIX
+    # ===============================
+
     cm = confusion_matrix(labels, preds)
-    cm_norm = cm.astype(float)/cm.sum(axis=1, keepdims=True)
+    cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
 
     plt.figure(figsize=(6,5))
     sns.heatmap(cm_norm, annot=True, fmt=".2%", cmap="Blues")
+    plt.title(f"{folder_path.name} Confusion Matrix")
     plt.savefig(folder_path/"spatial_confusion_matrix.png")
     plt.close()
 
+    logger.info(f"Confusion matrix saved to {folder_path/'spatial_confusion_matrix.png'}")
+
+
+# ===============================
+# MAIN
+# ===============================
 
 def main():
 
